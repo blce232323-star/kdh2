@@ -2,16 +2,16 @@ import requests
 import time
 from datetime import datetime, timedelta
 import os
-
+ 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = "8598053920"
-
+ 
 MIN_BODY = 0.05
 MIN_VOL = 2.0
 MIN_GAP = 0.01
 LOOKBACK = 20
-
-
+ 
+ 
 def telegram(msg):
     try:
         r = requests.post(
@@ -25,48 +25,51 @@ def telegram(msg):
             print(f"텔레그램 실패: {r.text}")
     except Exception as e:
         print(f"텔레그램 오류: {e}")
-
-
+ 
+ 
 def get_tickers():
-    from pykrx import stock
+    import FinanceDataReader as fdr
     print("종목 로딩 중...")
-    today = datetime.now().strftime("%Y%m%d")
-    
     tickers = []
     for market in ["KOSPI", "KOSDAQ"]:
         try:
-            codes = stock.get_market_ticker_list(today, market=market)
-            for code in codes:
-                name = stock.get_market_ticker_name(code)
-                tickers.append({"code": code, "name": name, "market": market})
+            df = fdr.StockListing(market)
+            for _, row in df.iterrows():
+                code = str(row.get("Code", row.get("Symbol", ""))).zfill(6)
+                name = str(row.get("Name", ""))
+                if code and name:
+                    tickers.append({"code": code, "name": name, "market": market})
         except Exception as e:
-            print(f"{market} 로딩 오류: {e}")
-    
+            print(f"{market} 오류: {e}")
     print(f"{len(tickers)}개 종목 로딩 완료")
     return tickers
-
-
+ 
+ 
 def get_ohlcv(code):
-    from pykrx import stock
+    import FinanceDataReader as fdr
     try:
-        end = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
-        df = stock.get_market_ohlcv_by_date(start, end, code)
+        end = datetime.now().strftime("%Y-%m-%d")
+        start = (datetime.now() - timedelta(days=60)).strftime("%Y-%m-%d")
+        df = fdr.DataReader(code, start, end)
         if df is None or len(df) < LOOKBACK + 2:
             return []
         candles = []
         for date, row in df.iterrows():
+            vol = row.get("Volume", 0)
+            close = int(row.get("Close", 0))
+            open_ = int(row.get("Open", 0))
+            amount = int(vol) * close if vol and close else 0
             candles.append({
                 "date": str(date)[:10],
-                "open": int(row["시가"]),
-                "close": int(row["종가"]),
-                "amount": int(row["거래대금"])
+                "open": open_,
+                "close": close,
+                "amount": amount
             })
         return candles
     except:
         return []
-
-
+ 
+ 
 def check(candles):
     if len(candles) < LOOKBACK + 2:
         return None
@@ -100,21 +103,27 @@ def check(candles):
         "amt1": d1["amount"],
         "amt2": d2["amount"],
     }
-
-
+ 
+ 
 def fmt(a):
     if a >= 100_000_000:
         return f"{a//100_000_000:,}억"
     return f"{a//10_000:,}만"
-
-
+ 
+ 
 def main():
     now = datetime.now().strftime("%Y/%m/%d %H:%M")
     print(f"스크리너 시작: {now}")
-
+ 
     tickers = get_tickers()
+    
+    if len(tickers) == 0:
+        msg = f"📊 [{now}]\n종목 로딩 실패 - API 오류"
+        print(msg)
+        telegram(msg)
+        return
+ 
     matched = []
-
     for i, t in enumerate(tickers):
         if i % 200 == 0:
             print(f"진행: {i}/{len(tickers)}")
@@ -124,7 +133,7 @@ def main():
             matched.append({**t, **r})
             print(f"패턴발견: {t['name']} ({t['code']})")
         time.sleep(0.1)
-
+ 
     if not matched:
         msg = f"📊 [{now}]\n스캔완료 - 조건충족 종목없음"
     else:
@@ -140,11 +149,11 @@ def main():
         if len(matched) > 10:
             lines.append(f"외 {len(matched)-10}종목")
         msg = "\n".join(lines)
-
+ 
     print(msg)
     telegram(msg)
     print("완료")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
