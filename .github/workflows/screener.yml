@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: 패키지 설치
-        run: pip install requests finance-datareader
+        run: pip install requests yfinance
       - name: 스크리너 실행
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
