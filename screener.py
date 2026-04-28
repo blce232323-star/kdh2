@@ -1,8 +1,7 @@
 import requests
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
-import re
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT = "8598053920"
@@ -29,52 +28,40 @@ def telegram(msg):
 
 
 def get_tickers():
+    from pykrx import stock
     print("종목 로딩 중...")
+    today = datetime.now().strftime("%Y%m%d")
+    
     tickers = []
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
-    for market in [0, 1]:
-        for page in range(1, 60):
-            url = f"https://finance.naver.com/sise/sise_market_sum.naver?sosok={market}&page={page}"
-            try:
-                res = requests.get(url, headers=headers, timeout=10)
-                items = re.findall(r'href="/item/main\.naver\?code=(\d{6})">([^<]+)</a>', res.text)
-                if not items:
-                    break
-                mkt = "KOSPI" if market == 0 else "KOSDAQ"
-                for code, name in items:
-                    tickers.append({"code": code, "name": name.strip(), "market": mkt})
-                time.sleep(0.1)
-            except:
-                break
-    seen = set()
-    result = []
-    for t in tickers:
-        if t["code"] not in seen:
-            seen.add(t["code"])
-            result.append(t)
-    print(f"{len(result)}개 종목 로딩 완료")
-    return result
+    for market in ["KOSPI", "KOSDAQ"]:
+        try:
+            codes = stock.get_market_ticker_list(today, market=market)
+            for code in codes:
+                name = stock.get_market_ticker_name(code)
+                tickers.append({"code": code, "name": name, "market": market})
+        except Exception as e:
+            print(f"{market} 로딩 오류: {e}")
+    
+    print(f"{len(tickers)}개 종목 로딩 완료")
+    return tickers
 
 
 def get_ohlcv(code):
-    url = f"https://api.finance.naver.com/siseJson.naver?symbol={code}&requestType=1&count=30&timeframe=day"
-    headers = {"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"}
+    from pykrx import stock
     try:
-        res = requests.get(url, headers=headers, timeout=5)
-        data = res.json()
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=60)).strftime("%Y%m%d")
+        df = stock.get_market_ohlcv_by_date(start, end, code)
+        if df is None or len(df) < LOOKBACK + 2:
+            return []
         candles = []
-        for row in data:
-            if len(row) >= 7 and row[0] and row[0] != "날짜":
-                try:
-                    candles.append({
-                        "date": str(row[0]).replace(".", "-"),
-                        "open": int(str(row[1]).replace(",", "")),
-                        "close": int(str(row[4]).replace(",", "")),
-                        "amount": int(str(row[6]).replace(",", ""))
-                    })
-                except:
-                    continue
-        candles.sort(key=lambda x: x["date"])
+        for date, row in df.iterrows():
+            candles.append({
+                "date": str(date)[:10],
+                "open": int(row["시가"]),
+                "close": int(row["종가"]),
+                "amount": int(row["거래대금"])
+            })
         return candles
     except:
         return []
@@ -136,7 +123,7 @@ def main():
         if r:
             matched.append({**t, **r})
             print(f"패턴발견: {t['name']} ({t['code']})")
-        time.sleep(0.05)
+        time.sleep(0.1)
 
     if not matched:
         msg = f"📊 [{now}]\n스캔완료 - 조건충족 종목없음"
